@@ -1,0 +1,3 @@
+{
+  "error": "403 Forbidden from POST https://us-central1-aiplatform.googleapis.com/v1/projects/exalted-altar-467314-t9/locations/us-central1/endpoints/openapi/chat/completions"
+}

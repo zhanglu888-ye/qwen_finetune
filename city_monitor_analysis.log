@@ -1,0 +1,11 @@
+2025-08-04 17:46:42,397 - INFO - Found 8 images to process
+2025-08-04 17:46:42,397 - INFO - New images to process: 8
+2025-08-04 17:47:20,924 - INFO - HTTP Request: POST https://api.yourouter.ai/v1/ "HTTP/1.1 401 Unauthorized"
+2025-08-04 17:47:22,879 - INFO - HTTP Request: POST https://api.yourouter.ai/v1/ "HTTP/1.1 401 Unauthorized"
+2025-08-04 17:47:24,804 - INFO - HTTP Request: POST https://api.yourouter.ai/v1/ "HTTP/1.1 401 Unauthorized"
+2025-08-04 17:47:24,906 - ERROR - Failed /host/ssddata/disk2/zhanglu/clip-data/datasets/changwei/xn/250804/data/有效/积水内涝/48567265360043322863504_400.jpeg: req[https://api.yourouter.ai/v1/] error
+2025-08-04 17:47:29,684 - INFO - HTTP Request: POST https://api.yourouter.ai/v1/ "HTTP/1.1 401 Unauthorized"
+2025-08-04 17:47:31,845 - INFO - HTTP Request: POST https://api.yourouter.ai/v1/ "HTTP/1.1 401 Unauthorized"
+2025-08-04 17:47:33,697 - INFO - HTTP Request: POST https://api.yourouter.ai/v1/ "HTTP/1.1 401 Unauthorized"
+2025-08-04 17:47:33,799 - ERROR - Failed /host/ssddata/disk2/zhanglu/clip-data/datasets/changwei/xn/250804/data/有效/积水内涝/43642485334042044961038_400.jpeg: req[https://api.yourouter.ai/v1/] error
+2025-08-04 17:47:36,519 - INFO - HTTP Request: POST https://api.yourouter.ai/v1/ "HTTP/1.1 401 Unauthorized"

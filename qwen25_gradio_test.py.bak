@@ -1,0 +1,168 @@
+import os
+import time
+import torch
+import gradio as gr
+from PIL import Image
+from transformers import AutoProcessor
+try:
+    # 推荐：专用类，能去掉 AutoModelForVision2Seq 的弃用警告
+    from transformers import Qwen2_5_VLForConditionalGeneration as QwenVLModel
+except Exception:
+    # 兜底：极少数旧版本 transformers 没这个类时可换成通用类
+    from transformers import AutoModelForImageTextToText as QwenVLModel
+
+from qwen_vl_utils import process_vision_info  # 你的工具
+
+# --------------------------
+# 环境 & 路径配置（可用环境变量覆盖）
+# --------------------------
+MODEL_PATH = os.environ.get(
+    "LOCAL_MODEL_PATH",
+    "/host/ssddata/disk1/wyd/model/qwen/qwen2.5-vl-3b-instruct"  # 改成你的3B模型路径
+)
+SERVER_NAME = os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0")
+SERVER_PORT = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
+AUTH_PAIRS = os.environ.get("GRADIO_AUTH", "").strip()  # "user:pass,user2:pass2"
+
+assert os.path.isdir(MODEL_PATH), f"模型目录不存在: {MODEL_PATH}"
+
+# --------------------------
+# 加载模型（仅启动一次）
+# --------------------------
+print(f"[Init] Loading model from: {MODEL_PATH}")
+torch.backends.cudnn.benchmark = True
+
+# 开启 fast 图像处理器
+processor = AutoProcessor.from_pretrained(
+    MODEL_PATH,
+    trust_remote_code=True,
+    use_fast=True,
+)
+
+# 尽量用 bfloat16/float16，自动分配设备（多GPU会切分）
+dtype = torch.bfloat16 if torch.cuda.is_available() else "auto"
+model = QwenVLModel.from_pretrained(
+    MODEL_PATH,
+    torch_dtype=dtype,
+    device_map="auto",
+    trust_remote_code=True,
+    # 如环境已装好 flash-attn，可开启以省显存/提速：
+    # attn_implementation="flash_attention_2",
+)
+model.eval()
+print("[Init] Model loaded.")
+
+# --------------------------
+# 推理函数
+# --------------------------
+def infer(image: Image.Image,
+          user_prompt: str,
+          temperature: float,
+          top_k: int,
+          top_p: float,
+          max_new_tokens: int,
+          seed: int,
+          use_beam_search: bool):
+
+    if image is None:
+        return "请先上传图片。"
+    if not user_prompt or not user_prompt.strip():
+        return "请填写提示词（prompt）。"
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": user_prompt.strip()},
+            ],
+        }
+    ]
+
+    # 构造输入
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    ).to(model.device)
+
+    # 采样/束搜索参数
+    gen_kwargs = {
+        "max_new_tokens": int(max_new_tokens),
+        "do_sample": not use_beam_search,
+        "temperature": float(temperature),
+        "top_k": int(top_k),
+        "top_p": float(top_p),
+        "num_beams": 4 if use_beam_search else 1,
+        "repetition_penalty": 1.05,
+    }
+    if not use_beam_search and seed >= 0:
+        g = torch.Generator(device=model.device)
+        g.manual_seed(int(seed))
+        gen_kwargs["generator"] = g
+
+    t0 = time.time()
+    with torch.inference_mode():
+        out_ids = model.generate(**inputs, **gen_kwargs)
+
+    # 去掉输入前缀，仅保留新增tokens
+    trimmed = [o[len(i):] for i, o in zip(inputs.input_ids, out_ids)]
+    text_out = processor.batch_decode(
+        trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )[0].strip()
+
+    return f"{text_out}\n\n—— 用时 {time.time()-t0:.2f}s"
+
+# --------------------------
+# Gradio UI
+# --------------------------
+with gr.Blocks(title="Qwen2.5-VL Web UI", theme=gr.themes.Soft()) as demo:
+    gr.Markdown("## Qwen2.5-VL 推理演示")
+
+    with gr.Row():
+        with gr.Column():
+            image_in = gr.Image(type="pil", label="上传图片", sources=["upload", "clipboard"])
+            prompt_in = gr.Textbox(label="提示词（Prompt）", lines=4,
+                                   placeholder="例如：请详细描述画面中的场景、人物、文字…")
+            with gr.Accordion("高级参数", open=False):
+                temperature = gr.Slider(0.1, 1.5, value=0.7, step=0.05, label="temperature")
+                top_k = gr.Slider(1, 100, value=40, step=1, label="top_k")
+                top_p = gr.Slider(0.1, 1.0, value=0.9, step=0.05, label="top_p")
+                max_new_tokens = gr.Slider(8, 512, value=128, step=8, label="max_new_tokens")
+                seed = gr.Number(value=42, precision=0, label="seed（<0 取消固定）")
+                use_beam_search = gr.Checkbox(False, label="使用束搜索（关闭采样）")
+            run_btn = gr.Button("提交", variant="primary")
+
+        with gr.Column():
+            out_txt = gr.Textbox(label="模型输出", lines=14)
+
+    # 事件级并发：建议限制为 1~2，避免显存爆
+    run_btn.click(
+        infer,
+        inputs=[image_in, prompt_in, temperature, top_k, top_p, max_new_tokens, seed, use_beam_search],
+        outputs=[out_txt],
+        queue=True,
+        show_progress=True,
+        concurrency_limit=2,          # <—— 关键：按事件设置并发
+        concurrency_id="gpu_queue",   # 可选：多事件共享同一并发队列
+    )
+
+# 全局队列：设置默认并发与队列长度（新版不再使用 concurrency_count）
+demo.queue(default_concurrency_limit=2, max_size=64)  # <—— 关键：替代 concurrency_count
+# 简单认证（如需）
+auth_arg = None
+pairs = []
+for item in filter(None, (AUTH_PAIRS or "").split(",")):
+    if ":" in item:
+        u, p = item.split(":", 1)
+        pairs.append((u.strip(), p.strip()))
+if pairs:
+    auth_arg = pairs
+
+demo.launch(server_name=SERVER_NAME, server_port=SERVER_PORT, auth=auth_arg)
